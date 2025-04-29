@@ -1,10 +1,10 @@
 #!/bin/bash
 
-max_depth=-1
+# Парсинг аргументов
+max_depth=""
 input_dir=""
 output_dir=""
 
-args=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --max_depth)
@@ -12,19 +12,20 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         *)
-            args+=("$1")
+            if [[ -z "$input_dir" ]]; then
+                input_dir="$1"
+            else
+                output_dir="$1"
+            fi
             shift
             ;;
     esac
 done
 
-if [[ ${#args[@]} -ne 2 ]]; then
+if [[ -z "$input_dir" || -z "$output_dir" ]]; then
     echo "Usage: $0 [--max_depth N] input_dir output_dir"
     exit 1
 fi
-
-input_dir="${args[0]}"
-output_dir="${args[1]}"
 
 if [[ ! -d "$input_dir" ]]; then
     echo "Input directory does not exist: $input_dir"
@@ -33,49 +34,54 @@ fi
 
 mkdir -p "$output_dir"
 
-if [[ $max_depth -ge 0 ]]; then
-    find "$input_dir" -type f | while read -r file; do
-        relative_path=$(realpath --relative-to="$input_dir" "$file")
+process_file() {
+    local file="$1"
+    local output_dir="$2"
+    local max_depth="$3"
+
+    local relative_path
+    relative_path=$(realpath --relative-to="$input_dir" "$file")
+
+    if [[ -n "$max_depth" ]]; then
         IFS='/' read -ra parts <<< "$relative_path"
-        num_dirs=$((${#parts[@]} - 1)) 
-        
-        if [[ $num_dirs -gt $max_depth ]]; then
-            start_index=$((num_dirs - max_depth))
-            if [[ $start_index -lt 0 ]]; then
-                start_index=0
-            fi
-            new_parts=("${parts[@]:$start_index}")
+        local num_parts=${#parts[@]}
+        local depth=$((num_parts - 1))
+
+        if [[ $depth -le $max_depth ]]; then
+            dest="$output_dir/$relative_path"
         else
-            new_parts=("${parts[@]}")
+            trimmed_parts=("${parts[@]:$max_depth}")
+            trimmed_path=$(IFS='/' ; echo "${trimmed_parts[*]}")
+            dest="$output_dir/$trimmed_path"
         fi
-        
-        new_relative_path=$(IFS='/'; echo "${new_parts[*]}")
-        dest="$output_dir/$new_relative_path"
-        mkdir -p "$(dirname "$dest")"
-        cp "$file" "$dest"
-    done
-else
-    find "$input_dir" -type f | while read -r file; do
+
+        dest_dir=$(dirname "$dest")
+        mkdir -p "$dest_dir"
+        cp -- "$file" "$dest"
+    else
         filename=$(basename "$file")
-        name="${filename%.*}"
-        extension="${filename##*.}"
-        
-        if [[ "$name" == "$filename" ]]; then
-            extension=""
+        base="${filename%.*}"
+        ext="${filename##*.}"
+
+        if [[ "$base" == "$ext" ]]; then
+            ext=""
+        else
+            ext=".$ext"
         fi
-        
-        dest_name="$filename"
+
         counter=1
-        
-        while [[ -e "$output_dir/$dest_name" ]]; do
-            if [[ -z "$extension" ]]; then
-                dest_name="${name}_$counter"
-            else
-                dest_name="${name}_$counter.${extension}"
-            fi
+        new_name="$base$ext"
+
+        while [[ -e "$output_dir/$new_name" ]]; do
+            new_name="${base}_$counter$ext"
             ((counter++))
         done
-        
-        cp "$file" "$output_dir/$dest_name"
-    done
-fi
+
+        cp -- "$file" "$output_dir/$new_name"
+    fi
+}
+
+export -f process_file
+export input_dir output_dir max_depth
+
+find "$input_dir" -type f -print0 | xargs -0 -I {} bash -c 'process_file "{}" "$output_dir" "$max_depth"'
